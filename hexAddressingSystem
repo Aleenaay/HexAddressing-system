@@ -1,0 +1,183 @@
+Option Compare Database
+Option Explicit
+
+Private Const MAX_HEX_LEN = 32
+Private Const MAX_HEX_DIGIT = 16
+Private Const ROOT_HEX_PATH = "00000000000000000000000000000000"
+
+Sub initPaths(treeID As Long, treeType)
+    Dim fkTree, pkNode, nodeTable, fkParent, pathTable As String
+    If treeType = 1 Then
+        pkNode = "PK_treenode_id"
+        fkTree = "FK_tree_id"
+        fkParent = "FK_ptreenode_id"
+        nodeTable = "tree_nodes"
+        pathTable = "calculated_paths_tags"
+    ElseIf treeType = 2 Then
+        pkNode = "PK_cn_id"
+        fkTree = "FK_ca_id"
+        fkParent = "FK_pcn_id"
+        nodeTable = "content_nodes"
+        pathTable = "calculated_paths"
+    End If
+    
+    Dim queue As Object
+    Set queue = CreateObject("System.Collections.Queue")
+    
+    ' Create a dictionary to store the paths from the root to each node
+    Dim nodePaths As Object
+    Set nodePaths = CreateObject("Scripting.Dictionary")
+    
+    ' Create a dictionary to store the hex paths
+    Dim hexPaths As Object
+    Set hexPaths = CreateObject("Scripting.Dictionary")
+    
+    ' get root node
+    Dim rsNodes As DAO.Recordset
+    Set rsNodes = CurrentDb.OpenRecordset("SELECT " & pkNode & " FROM " & nodeTable & "  WHERE " & _
+                                            fkParent & " is Null" & " AND " & fkTree & "= " & treeID)
+    ' exit sub if no root exists
+    If rsNodes.RecordCount = 0 Then
+        MsgBox "No Parent found", vbCritical, "Invalid Parent"
+        Exit Sub
+    End If
+
+    Dim nodeID As Long
+    nodeID = rsNodes.Fields(pkNode)
+
+    ' Deletes all previous paths and inserts root
+    CurrentDb.Execute "DELETE * FROM " & pathTable & " WHERE tree_id=" & treeID
+    CurrentDb.Execute "INSERT INTO " & pathTable & " (tree_id, node_id, path, hex_path) " & _
+                      "SELECT " & treeID & ", " & nodeID & ", " & nodeID & _
+                      ", '" & ROOT_HEX_PATH & "'"
+
+    queue.Enqueue nodeID ' Add the current node to the queue
+    nodePaths.Add nodeID, "" & nodeID ' Add the current node path to the dictionary
+    hexPaths.Add nodeID, ""
+
+    ' Traverse the tree in BFS
+    Do While queue.count > 0
+
+        ' Get the first node in the queue
+        Dim parentNodeID As Long
+        parentNodeID = queue.Dequeue
+
+        ' Retrieve the child nodes of the current node from the node table
+        Set rsNodes = CurrentDb.OpenRecordset("SELECT " & pkNode & " FROM " & nodeTable & " WHERE " & fkTree & "=" & _
+                                               treeID & " AND " & fkParent & "=" & parentNodeID)
+
+        Dim count As Integer
+        count = 1
+
+        Do Until rsNodes.EOF
+            Dim hexNum As String
+            Dim childNodeID As Long
+
+            childNodeID = rsNodes.Fields(pkNode)
+            
+            If count > MAX_HEX_DIGIT Then hexNum = Hex(count) Else hexNum = "0" & Hex(count)
+
+            ' Add the child node to the queue
+            queue.Enqueue childNodeID
+
+            ' Add the child node path to the dictionary by appending the parent's path with the current node ID
+            nodePaths.Add childNodeID, nodePaths(parentNodeID) & " -> " & childNodeID
+            hexPaths.Add childNodeID, hexPaths(parentNodeID) & hexNum
+
+
+            hexNum = hexPaths(parentNodeID) & hexNum
+            hexNum = hexNum & Replace(Space(MAX_HEX_LEN - Len(hexNum)), " ", "0")
+
+            ' Insert a new record for each child node in the calculated_path table with the updated path
+            CurrentDb.Execute "INSERT INTO " & pathTable & " (tree_id, node_id, parent_id, path, hex_path, sort) " & _
+                              "SELECT " & treeID & ", " & childNodeID & ", " & parentNodeID & ", '" & nodePaths(childNodeID) & _
+                              "'" & ", " & "'" & hexNum & "'" & ", " & count
+
+            count = count + 1
+            rsNodes.MoveNext
+        Loop
+
+        rsNodes.Close
+        Set rsNodes = Nothing
+    Loop
+
+    Set queue = Nothing
+    Set nodePaths = Nothing
+    Set hexPaths = Nothing
+End Sub
+
+
+Sub addPaths(treeID As Long, parentID As Long, nodeID As Long, treeType)
+    Dim fkTree, pkNode, nodeTable, fkParent, pathTable As String
+    If treeType = 1 Then
+        pkNode = "PK_treenode_id"
+        fkTree = "FK_tree_id"
+        fkParent = "FK_ptreenode_id"
+        nodeTable = "tree_nodes"
+        pathTable = "calculated_paths_tags"
+    ElseIf treeType = 2 Then
+        pkNode = "PK_cn_id"
+        fkTree = "FK_ca_id"
+        fkParent = "FK_pcn_id"
+        nodeTable = "content_nodes"
+        pathTable = "calculated_paths"
+    End If
+    
+    Dim parentNode As DAO.Recordset
+    Set parentNode = CurrentDb.OpenRecordset("SELECT parent_id, path, hex_path FROM " & pathTable & _
+                                            " WHERE node_id=" & parentID & " AND tree_id=" & treeID)
+    ' exit sub if no parent exists
+    If parentNode.RecordCount = 0 Then
+        MsgBox "No Parent found", vbCritical, "Invalid Parent"
+        Exit Sub
+    End If
+
+    Dim siblingNodes As DAO.Recordset
+    Set siblingNodes = CurrentDb.OpenRecordset("SELECT hex_path, sort FROM " & pathTable & " WHERE parent_id=" & _
+                                                parentID & " ORDER BY sort DESC")
+                                                
+    Dim sort As Integer
+    Dim hexPath As String
+    Dim path As String
+    Dim insertQuery As String
+    
+    ' Checks if ParentNode contains children
+    If siblingNodes.RecordCount > 0 And siblingNodes.RecordCount < 255 Then
+        Dim bytePath() As Byte
+        Dim lastIndex As Integer
+
+        bytePath = HexToByte(siblingNodes.Fields("hex_path"))
+        lastIndex = UBound(bytePath)
+        bytePath(lastIndex) = bytePath(lastIndex) + 1
+        
+        hexPath = ByteToHex(bytePath)
+        sort = siblingNodes.Fields("sort") + 1
+    ElseIf siblingNodes.RecordCount = 0 Then
+        hexPath = RemoveTrailingZeros(parentNode.Fields("hex_path")) & "01"
+        hexPath = hexPath & Replace(Space(MAX_HEX_LEN - Len(hexPath)), " ", "0")
+        sort = 1
+    Else
+        Exit Sub
+    End If
+    
+    path = parentNode.Fields("path") & " -> " & nodeID
+    
+    insertQuery = "INSERT INTO " & pathTable & " (tree_id, node_id, parent_id, path, hex_path, sort) " & _
+                        "SELECT " & treeID & ", " & nodeID & ", " & parentID & _
+                        ", '" & path & "'" & ", " & "'" & hexPath & "'" & ", " & sort
+    
+    ' Insert a new record for each child node in the calculated_path table with the updated path
+    CurrentDb.Execute insertQuery
+End Sub
+
+Sub deletePaths(treeID As Long, nodeID As Long, treeType)
+    Dim fkTree, pkNode, nodeTable, fkParent, pathTable As String
+    If treeType = 1 Then
+        pathTable = "calculated_paths_tags"
+    ElseIf treeType = 2 Then
+        pathTable = "calculated_paths"
+    End If
+    
+    CurrentDb.Execute "DELETE * FROM " & pathTable & " WHERE tree_id=" & treeID & _
+                        " AND node_id = " & nodeID
+End Sub
