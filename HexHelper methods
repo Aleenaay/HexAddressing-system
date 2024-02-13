@@ -1,0 +1,109 @@
+Private Const ROOT_HEX_PATH = "00000000000000000000000000000000"
+
+Function MultiplySpaces(hexPath As String) As String
+    Dim bytes() As Byte
+    Dim count As Integer
+    Dim result As String
+    
+    If hexPath = ROOT_HEX_PATH Then
+        MultiplySpaces = ""
+        Exit Function
+    End If
+
+    bytes = HexToByte(hexPath)
+    count = (UBound(bytes) + 1) * 4
+    result = String(count, "-")
+    MultiplySpaces = result
+End Function
+
+Function isAncestor(hexPath1 As String, hexPath2 As String) As Boolean
+    Dim bytes1() As Byte
+    Dim bytes2() As Byte
+
+    ' Convert hex paths to byte arrays
+    bytes1 = HexToByte(hexPath1)
+    bytes2 = HexToByte(hexPath2)
+    
+    If UBound(bytes1) = 0 And bytes1(0) = 0 Then 'Dealing with root node
+        isAncestor = True
+        Exit Function
+    End If
+
+    
+    If UBound(bytes2) < UBound(bytes1) Then
+        isAncestor = False ' bytes2 < bytes1
+        Exit Function
+    End If
+    ' Check if node1 is an ancestor of node2
+    Dim i As Long
+    Dim j As Long
+    Dim matchFound As Boolean
+
+    For i = 0 To UBound(bytes2) - UBound(bytes1)
+        matchFound = True
+        For j = 0 To UBound(bytes1)
+            If bytes2(i + j) <> bytes1(j) Then
+                matchFound = False
+                Exit For
+            End If
+        Next j
+
+        If matchFound Then
+            isAncestor = True ' bytes1 is a subsequence of bytes2
+            Exit Function
+        End If
+    Next i
+
+    isAncestor = False ' bytes1 is not a subsequence of bytes2
+End Function
+
+Public Function RemoveTrailingZeros(num As String) As String
+    Dim i As Integer
+    i = Len(num)
+
+    Do While i > 1 And Mid(num, i, 1) = "0"
+        i = i - 1
+    Loop
+
+    If i = 1 And Mid(num, 1, 1) = "0" Then
+        RemoveTrailingZeros = ""
+    Else
+        RemoveTrailingZeros = Left(num, i)
+    End If
+End Function
+
+Function HexToByte(hexPath As String) As Byte()
+    Dim byteLength As Integer
+    Dim NonZeroHexPath As String
+    NonZeroHexPath = RemoveTrailingZeros(hexPath)
+    byteLength = Len(NonZeroHexPath) \ 2
+
+    If byteLength = 0 Then
+        ReDim bytes(0 To 0) As Byte
+        bytes(0) = 0 ' Set the single element to 0
+    Else
+        ReDim bytes(0 To byteLength - 1) As Byte
+
+        Dim i As Integer
+        For i = 0 To byteLength - 1
+            bytes(i) = CByte("&H" & Mid(NonZeroHexPath, i * 2 + 1, 2))
+        Next i
+    End If
+
+    HexToByte = bytes
+End Function
+
+Function ByteToHex(bytes() As Byte) As String
+    Dim hexPath As String
+    hexPath = ""
+
+    Dim i As Integer
+    For i = 0 To UBound(bytes)
+        hexPath = hexPath & Right("00" & Hex(bytes(i)), 2)
+    Next i
+
+    ' Pad the hex path with zeros to ensure it has a total of 32 digits
+    hexPath = hexPath & String(32 - Len(hexPath), "0")
+
+    ByteToHex = hexPath
+End Function
